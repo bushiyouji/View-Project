@@ -1,0 +1,140 @@
+你是我的计算机视觉课程助教。项目「基于深度学习特征检索的物体识别 Demo」（图片/视频/摄像头识别 + 语音播报）。骨干为易变项，当前骨干信息见 ② 与 ④。
+
+====================================================================
+① 项目与路径
+====================================================================
+路径（数据与项目分离；所有数据路径必须从 config.yaml 读取，不要硬编码）：
+- 项目根：C:\Users\JSZX\Downloads\projects\object_recognition_demo
+- 数据根：C:\Users\JSZX\Downloads\cv_data\object_recognition_demo
+- 2026-10-19 本机实况：当前工作副本在 D:\Downloads\projects\object_recognition_demo，数据根在 D:\Downloads\cv_data\object_recognition_demo（config.yaml 的 data_root 已指向 D 盘）。上方 JSZX 路径为原机器路径，两台机器共用本文档时以各自 config.yaml 为准。
+
+数据组织：
+- 注册图：data_root/gallery/<类别名>/，每类至少 5 张。类别名为中文（当前 12 类，各类张数见 ④）。
+- 支持的图片扩展名：全项目统一 .jpg|.jpeg|.png|.jfif|.webp（校验/评估/CLI/视频/测试）；仅界面「录入」额外接受 .bmp（有意保留，勿并入）。
+- 测试图：data_root/test/<类别名>/；未知测试图：data_root/test/unknown/（其下图片一律视为 unknown，不再判子文件夹）。
+- 图片可随机命名，真值 = 直接父文件夹名。
+- 视频测试集：data_root/test/video/<类别名>/*.mp4（支持 mp4/avi/mov/mkv/webm）。当前 2 个：test/video/瓶子/、test/video/葡萄/。
+- 特征库：data_root/features/gallery.npz + labels.json（save() 为临时文件 + 原子替换并自动解除只读属性，不要改回直接覆盖写）。由 scripts/build_gallery.py 离线构建；改动 gallery 数据后必须重跑 build_gallery.py 重建（条数与维度见 ④）。
+- 评估报告：data_root/reports/eval_report.json、threshold_calibration.json、data_index.json。
+
+====================================================================
+② 已实现功能
+====================================================================
+（增量修改，不要重复造轮子）
+- Gradio 五个标签页：录入 / 识别 / 视频识别 / 视频实时识别 / 管理。
+  - 录入：批量录入为生成器 + gr.Progress 进度条（逐类录入、逐类落盘）；结果区左右布局（左=批量录入结果，右=当前已注册列表，文字居中），列表 3 秒自动刷新；管理页删除全部/删空后同步清空录入页结果。
+  - 视频实时识别：摄像头常开预览；「这是什么」触发 3 秒倒计时 → 30 帧投票识别（50ms Timer 主循环）；排行榜容器内显示「识别结果/相似度」；识别结束后按结果显示「学习」（unknown）或「纠错」（已有答案）按钮，面板展示本轮取景框 ROI 干净帧（图片名=该帧识别结果），多选 + 输入物品名 → enroll_paths_chunked 分批入库（一轮可多次录入）；点「这是什么」/开关摄像头/切 Tab 自动收起面板。
+  - 特征库并发：RecognitionService.gallery_lock（threading.Lock）保护所有 gallery add/save/delete/load；3 秒热加载 Timer（录入/视频/实时/管理页均有）与录入/删除互斥，修复了"批量录入中途被 load() 覆盖只剩一个类别"的竞态。
+- 识别：整图直接走 ResNet50 特征检索（top-k + 阈值判 unknown）。已移除 Faster R-CNN 检测/裁剪/画框；命令行与摄像头同样整图识别。
+- 视频：抽帧后逐帧对整张帧识别 + 多数投票聚合。
+- 摄像头实时识别：python webcam_app.py（按 q 退出）。
+- 命令行闭环：python app_cli.py enroll / recognize / list / delete。
+- 语音：Web 界面用浏览器 Web Speech API 播报（语速可调、可关闭；类别名已是中文直接朗读，原 label_zh 英中映射已删除，仅保留 unknown_label_zh 配置 unknown 播报文本）；utils/tts.py 是 pyttsx3 备用模块（python utils/tts.py 自测），仅 CLI/备用，Web 界面不依赖它；pyttsx3 为可选依赖（requirements.txt 已注释），未安装时自动降级为文本打印。
+- 骨干确认：ResNet50（ImageNet1K_V1，去 FC，2048 维，L2 归一化），硬编码在 core/feature_extractor.py；预处理 Resize(256) + CenterCrop(224) + ImageNet mean/std。
+
+====================================================================
+③ 技术约束
+====================================================================
+- CPU 可运行，低算力优先；统一用项目 venv 运行（venv\Scripts\python.exe）。
+- requirements.txt 钉死 torch==2.2.2 / torchvision==0.17.2 / numpy<2，不要升级 torch（系统 Python 的高版本 torch 因 DLL 初始化失败不可用）。
+- PyTorch + torchvision；ImageNet 预训练 ResNet50 去掉 FC，2048 维特征，L2 归一化。
+- 识别用余弦相似度 + top-k 检索；相似度低于阈值判 unknown（threshold: 0.75、topk: 5，均从 config.yaml 读取）。
+- 评估参考目标 registered_acc 0.90 / unknown_recall 0.90（config.yaml 的 eval_min_*）：仅为参考目标，不是硬性要求；脚本只输出指标、不自动判定通过/失败，需人工对照。禁止为达标而调低测试门槛。
+- 界面用 Gradio；语音输入与播报可降级；自动测试不依赖麦克风、摄像头、网络。
+- 每次只修改我指定的文件，不改无关文件；不伪造运行结果；先给计划、再给代码、再给测试命令；测试失败只修相关文件并解释原因。
+
+网络环境事实（换骨干/装包时参考）：
+- 可达：pypi.org、download.pytorch.org、openaipublic.azureedge.net、hf-mirror.com、清华镜像
+- 不可达：github.com、codeload.github.com、raw.githubusercontent.com、huggingface.co
+- resnet50 权重已缓存并用于当前实现。
+- 为 clip 验证临时安装的 6 个包（open_clip_torch/timm/ftfy/regex/safetensors/wcwidth）已于 2026-10-16 全部卸载，venv 干净（pip freeze 75→69）。
+
+验收方式：
+- venv\Scripts\python.exe scripts\check_dataset.py
+- venv\Scripts\python.exe scripts\build_gallery.py（改动 gallery 后必须重跑）
+- venv\Scripts\python.exe scripts\evaluate.py
+- venv\Scripts\python.exe scripts\evaluate_videos.py（运行前确认 config.yaml 的 video_test_dir 与 test/video 一致）
+- venv\Scripts\python.exe scripts\calibrate_threshold.py（阈值标定）
+- venv\Scripts\python.exe -m pytest -q
+
+====================================================================
+④ 当前状态快照（2026-10-19 实测）
+====================================================================
+【本节是唯一允许频繁改动的部分，下次重测只改这里】
+- 骨干：ResNet50（ImageNet1K_V1 去 FC）/ 2048 维 / L2 归一化 / 预处理 Resize(256)+CenterCrop(224)。
+- 特征库：391 条（(391, 2048) float32），12 类：
+  书包42 / 冬瓜28 / 手机23 / 杯子27 / 瓶子53 / 白萝卜30 / 笔23 / 花50 / 苹果30 / 葡萄33 / 雨伞22 / 香蕉30。
+- 测试集：注册 40 张 + unknown 9 张 = 49 张。
+- 指标（evaluate.py，t=0.75，topk=5）：
+  registered_acc      = 0.8750 (35/40)
+  unknown_recall      = 0.5556 (5/9)
+  unknown_false_accept = 0.4444 (4/9)
+- 注册侧 5 张误分类（均为误分到已知类，阈值不可解）：
+  冬瓜→香蕉 0.8554 / 雨伞→书包 0.8254 / 花→葡萄 0.7862 / 笔→手机 0.7786 / 花→白萝卜 0.7589。
+- unknown 侧 4 张误接受：R-C.jpg→白萝卜 0.8110 / OIP-C.webp→白萝卜 0.8063 / 34622223→花 0.7598 / OIP-C (1).webp→白萝卜 0.7564。
+- 边界：unknown 最高分 0.8110（R-C.jpg→白萝卜）vs 注册最低正确分 0.7527（书包）→ 重叠 0.0584。
+- 阈值标定：NO FEASIBLE INTERVAL（reg 上限 0.875 < 0.90；unknown 全拒需 t≥0.82，此时 reg 仅 0.65）。
+- pytest（2026-10-19 实测）：5 failed / 92 passed / 2 skipped。
+  失败清单：
+  1. test_recognizer::test_registered_test_images_recognized —— 冬瓜→香蕉（数据波动，旧）
+  2. test_video.py::test_recognize_video_full —— 假帧 red/blue 设计缺陷（旧）
+  3. test_video.py::test_sample_frames_zero_length —— empty.mp4 无法打开（旧）
+  4. test_recognizer::test_unknown_images_rejected —— unknown_recall 0.5556 < 0.75 门槛（新增，诚实失败）
+  5. test_evaluate_accuracy::test_real_dataset_accuracy_thresholds —— 同上（新增，诚实失败）
+  skip：dinov2_vits14（本机 torch hub 无缓存 + 网络不可达）、clip_vitb32（open_clip 缺依赖）。
+- check_dataset（沿用 2026-10-16 结果，10-19 重测流程未重跑）：[OK]（无 FAIL）。1 条无害 WARN：test/video 被图片校验误计为未注册图片类别。重跑确认前本条不作为 10-19 实测结论。
+- evaluate_videos：ResNet50 下未复测（旧值 video_top1_acc 1.00 系 ResNet18 时测得，不代表当前水平）。
+- features/ 备份文件（全部不许删）：
+  gallery.npz.pre_flower.bak (2547982 B，11 类 311 条库)
+  gallery.npz.pre_retest2.bak (3170574 B，12 类 411 条库)
+  gallery.npz.r18bak (635150 B，310 条 512 维 ResNet18)
+  gallery.npz.pre20bak / .step2bak / .stepCbak (各 264462 B，129 条旧基线)
+  labels.json 同名备份 6 个（.pre_flower 40352 B / .pre_retest2 44781 B / .r18bak 40213 B / .pre20bak/.step2bak/.stepCbak 各 17227 B）
+
+====================================================================
+⑤ 已试方向总表
+====================================================================
+（每行只写结论；表内数字为当时实测旧值，非当前状态，当前状态以 ④ 为准）
+方向 | 步骤 | 结果 | 根因 | 是否回退
+评估口径统一 | 第0步：build_gallery 离线建库 + evaluate 优先 load 持久化库 | 评估与 app/CLI 同源，落地保留 | 消除评估/运行口径分叉 | 否
+数据格式统一 | 第1/1.5步：IMG_EXTS 统一五元素（8 处）+ 目录零宽字符清除 | 格式统一，录入侧有意保留 .bmp | 格式/目录名杂讯 | 否
+阈值标定 | 第2步：calibrate_threshold 只读扫描 | NO FEASIBLE INTERVAL，任何阈值无法同时达标 | 特征判别力不足，非阈值问题 | 否（脚本保留，阈值路线证伪）
+整图预处理 | 第3步：去 CenterCrop | reg 0.9375 但 unk 0.5，严重失衡 | 整图背景干扰 unknown 判别 | 是（还原 CenterCrop224）
+翻转+MAX | 第4A步：注册侧翻转增强 + 按类 MAX 聚合 | flawer 超阈 0.757，unk 仅 0.75 | 增强不改变类间特征重叠 | 是
+三种聚合 | 第C步：max/mean/topm 三组对照 | 均无可行区间（mean reg 0.25，topm 0.5938） | 聚合方式不改变特征空间重叠 | 是（compare_agg.py 已删）
+骨干验证 | 第D步：verify_backbone.py + tests/backbones/ | resnet50/dinov2 当时验证通过；clip 缺依赖优雅 skip | 建立候选骨干独立验证通道 | 否
+数据扩充 | 用户扩 gallery 每类 20+，129→311 条 | reg 持平，unk 1.0→0.75（flawer→葡萄） | 原型变密，unknown 更易撞库 | 否（数据保留）
+骨干升级 | 第③步：ResNet18→ResNet50（仅改 feature_extractor） | reg 0.8125→0.9062 破 0.90 线；重叠 0.0436→0.0316 收窄 27.5% | 512→2048 维判别力提升 | 否（当前骨干）
+扩类（新增花类） | 2026-10-19 用户注册花类（74 张，后调为 50 张） | flawer 被正确识别（0.8664）；但引入 4 张花卉 unknown 误接受，unknown_recall 净降 | 花类划走一块特征空间，unknown 边界收缩 | 否（数据保留，净收益记为负）
+unknown 难例扩充 | 2026-10-19 unknown 2→9 张 | unk recall 1.0（小样本假象）→ 0.5556（真实水平） | 小样本掩盖花卉类与注册类的重叠 | 否（数据保留）
+
+====================================================================
+⑥ 关键结论与停止规则
+====================================================================
+- 瓶颈定位：特征判别力，非阈值 / 非预处理 / 非聚合（三者均已实验证伪）。核心表现：花卉类图与 花/白萝卜/葡萄 在 ResNet50 特征空间中重叠。
+- 扩类代价：每加一类会划走一块特征空间，unknown 边界随之收缩。花类救了 flawer（0.8664 正确识别）但引入 4 张花卉类误接受（0.7564~0.8110），净收益为负。
+- 证伪记录：unknown_recall 1.0 曾是 2 张小样本假象；unknown 扩到 9 张难例后暴露真实水平 0.5556（5/9）。此条供报告/答辩使用。
+- 停止规则：连续 3 个不同方向都无可行区间 → 停止参数侧优化，转骨干升级 / 数据治理 / 接受现状三选一。（当前阈值、预处理、聚合三方向均已证伪，条件已满足。）
+- 测试门槛规则：门槛只许随骨干/数据升级而上调，不许为让测试变绿而下调；若真实水平低于门槛，登记为已知基线失败（见 ④ pytest 失败 4/5），不掩盖。
+
+====================================================================
+⑦ 已知偏差与注意事项（2026-10-19 实况核对）
+====================================================================
+- 类别名已由英文改为中文，gallery 与 test 逐字一致（Ordinal+UTF8 字节级），目录名无零宽字符。
+- （已修复）label_zh 英中映射：因类名改中文后永不命中，config.yaml 的 label_zh 块与 app.py 全部查表代码已于 2026-10-27 删除，仅保留 unknown_label_zh。
+- （已修复）config.yaml 的 model_name 字段从未被读取（骨干硬编码在 core/feature_extractor.py），已于 2026-10-27 从 config.yaml 与 README.md 删除。
+- evaluate_videos.py 构建 gallery 时写死 "gallery"（未用 config 的 gallery_dir），视频报告文件名也写死 video_eval_report.json。
+- app.py 批量录入输入框的 placeholder 写死示例路径（仅提示文字，不影响运行）。
+- eval_min_registered_acc / eval_min_unknown_recall 未被任何脚本读取，「评估参考目标」需人工对照。
+- 本机存在多份项目副本（如 C:\Users\JSZX\Downloads\人工智能视觉设计1.2\... 与 D:\lrq\...）。pytest 的 test_video.py 失败回溯路径可能指向其他副本，疑因 venv/sys.path 中存在其他副本导致同名模块被遮盖。
+- 若后台存在 python/pythonw 进程（app.py/webcam_app 等），重命名数据目录或重建库可能被写回旧路径；操作前先确认无进程运行。
+- features/ 下备份文件清单见 ④，均不要删除。
+- 换骨干时旧库与新查询特征维度不同（512 vs 2048），必须重建库，不能跳过 build_gallery.py。
+- flawer.jpg 已移入 test/花/ 并被正确识别为花（score 0.8664），不再是 unknown 难例；tests 中旧 flawer 断言有 if 保护不会误报，但注释语义已过时。
+- dinov2 缓存实况（2026-10-19 实测）：本机 torch hub（C:\Users\Ljr20\.cache）无 dinov2 缓存，pytest 中 dinov2 用例 skip；此前「已恢复、可离线加载」的记录已不成立。
+- test/unknown 已扩至 9 张（含 7 张新增难例），其中 4 张被误接受（34622223→花 0.7598、OIP-C (1).webp→白萝卜 0.7564、OIP-C.webp→白萝卜 0.8063、R-C.jpg→白萝卜 0.8110），是当前 unknown_recall 0.5556 的真实来源。
+- pytest 的 2 个 unknown 门槛失败（test_unknown_images_rejected、test_real_dataset_accuracy_thresholds）为「诚实的失败」，属已知基线失败，不得通过下调门槛消除。
+- test_recognizer::test_registered_test_images_recognized 失败内容会随骨干/数据变化（ResNet18 时是书包→unknown，ResNet50 时是冬瓜→香蕉），属数据层面波动，非代码缺陷。
+- test/unknown/3.jpg 与 gallery/瓶子/3.jpg、gallery/葡萄/3.jpg 同文件名但 MD5 不同（非同图），已核验无真值泄漏；同名不算重叠。
+
+先确认你已理解以上规则，不要写代码。
